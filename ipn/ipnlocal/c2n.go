@@ -49,7 +49,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/debug/goroutines":
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write(goroutines.ScrubbedGoroutineDump())
+		w.Write(goroutines.ScrubbedGoroutineDump(true))
 	case "/debug/prefs":
 		writeJSON(b.Prefs())
 	case "/debug/metrics":
@@ -61,7 +61,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		if secs == 0 {
 			secs -= 1
 		}
-		until := time.Now().Add(time.Duration(secs) * time.Second)
+		until := b.clock.Now().Add(time.Duration(secs) * time.Second)
 		err := b.SetComponentDebugLogging(component, until)
 		var res struct {
 			Error string `json:",omitempty"`

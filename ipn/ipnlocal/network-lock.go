@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
@@ -53,20 +53,12 @@ type tkaState struct {
 	filtered  []ipnstate.TKAFilteredPeer
 }
 
-// permitTKAInitLocked returns true if tailnet lock initialization may
-// occur.
-// b.mu must be held.
-func (b *LocalBackend) permitTKAInitLocked() bool {
-	return envknob.UseWIPCode() || b.capTailnetLock
-}
-
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap whose signature does not verify.
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
-	// TODO(tom): Remove this guard for 1.35 and later.
-	if b.tka == nil && !b.permitTKAInitLocked() {
+	if b.tka == nil && !b.capTailnetLock {
 		health.SetTKAHealth(nil)
 		return
 	}
@@ -124,7 +116,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 
 	// Check that we ourselves are not locked out, report a health issue if so.
 	if nm.SelfNode != nil && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key, nm.SelfNode.KeySignature) != nil {
-		health.SetTKAHealth(errors.New("this node is locked out; it will not have connectivity until it is signed. For more info, see https://tailscale.com/s/locked-out"))
+		health.SetTKAHealth(errors.New(healthmsg.LockedOut))
 	} else {
 		health.SetTKAHealth(nil)
 	}
@@ -153,12 +145,13 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 	b.mu.Lock() // take mu to protect access to synchronized fields.
 	defer b.mu.Unlock()
 
-	// TODO(tom): Remove this guard for 1.35 and later.
-	if b.tka == nil && !b.permitTKAInitLocked() {
+	if b.tka == nil && !b.capTailnetLock {
 		return nil
 	}
 
-	b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
+	if b.tka != nil || nm.TKAEnabled {
+		b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
+	}
 
 	ourNodeKey := prefs.Persist().PublicNodeKey()
 
@@ -197,7 +190,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 				health.SetTKAHealth(nil)
 			}
 		} else {
-			return fmt.Errorf("[bug] unreachable invariant of wantEnabled /w isEnabled")
+			return fmt.Errorf("[bug] unreachable invariant of wantEnabled w/ isEnabled")
 		}
 	}
 
@@ -481,10 +474,9 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	var nlPriv key.NLPrivate
 	b.mu.Lock()
 
-	// TODO(tom): Remove this guard for 1.35 and later.
-	if !b.permitTKAInitLocked() {
+	if !b.capTailnetLock {
 		b.mu.Unlock()
-		return errors.New("this feature is not yet complete, a later release may support this functionality")
+		return errors.New("not permitted to enable tailnet lock")
 	}
 
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
@@ -885,6 +877,18 @@ func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.N
 
 	b.logf("Generated network-lock credential signature using %s", tkaKey.Public().CLIString())
 	return fmt.Sprintf("%s--TL%s-%s", preauthKey, tkaSuffixEncoder.EncodeToString(sig.Serialize()), tkaSuffixEncoder.EncodeToString(priv)), nil
+}
+
+// NetworkLockVerifySigningDeeplink asks the authority to verify the given deeplink
+// URL. See the comment for ValidateDeeplink for details.
+func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.DeeplinkValidationResult {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return tka.DeeplinkValidationResult{IsValid: false, Error: errNetworkLockNotActive.Error()}
+	}
+
+	return b.tka.authority.ValidateDeeplink(url)
 }
 
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {

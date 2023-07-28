@@ -543,3 +543,5 @@ llama
 shrimp
 prawn
 lobster
+chipmunk
+tails

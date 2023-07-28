@@ -223,9 +223,8 @@ type PeerStatus struct {
 	LastSeen       time.Time // last seen to tailcontrol; only present if offline
 	LastHandshake  time.Time // with local wireguard
 	Online         bool      // whether node is connected to the control plane
-	KeepAlive      bool
-	ExitNode       bool // true if this is the currently selected exit node.
-	ExitNodeOption bool // true if this node can be an exit node (offered && approved)
+	ExitNode       bool      // true if this is the currently selected exit node.
+	ExitNodeOption bool      // true if this node can be an exit node (offered && approved)
 
 	// Active is whether the node was recently active. The
 	// definition is somewhat undefined but has historically and
@@ -274,6 +273,8 @@ type PeerStatus struct {
 	// KeyExpiry, if present, is the time at which the node key expired or
 	// will expire.
 	KeyExpiry *time.Time `json:",omitempty"`
+
+	Location *tailcfg.Location `json:",omitempty"`
 }
 
 type StatusBuilder struct {
@@ -437,9 +438,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if st.InEngine {
 		e.InEngine = true
 	}
-	if st.KeepAlive {
-		e.KeepAlive = true
-	}
 	if st.ExitNode {
 		e.ExitNode = true
 	}
@@ -461,6 +459,7 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if t := st.KeyExpiry; t != nil {
 		e.KeyExpiry = ptr.To(*t)
 	}
+	e.Location = st.Location
 }
 
 type StatusUpdater interface {
@@ -588,6 +587,8 @@ func osEmoji(os string) string {
 		return "🖥️"
 	case "iOS":
 		return "📱"
+	case "tvOS":
+		return "🍎📺"
 	case "android":
 		return "🤖"
 	case "freebsd":
